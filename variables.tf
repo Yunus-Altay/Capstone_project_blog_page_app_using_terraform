@@ -3,34 +3,14 @@ variable "vpc_cidr_block" {
   description = "Default VPC cidr block"
 }
 
-variable "vpc_tag_name" {
-  default = "simaox-capstone-vpc"
+variable "tag_name" {
+  default = "simaox-capstone"
 }
 
-# variable "public_subnet_a_cidr" {
-#   default     = "90.90.10.0/24"
-#   description = "Default public subnet-a cidr block"
+# variable "subnet_name_tag" {
+#   default     = "aws_simaox"
+#   description = "Default VPC cidr block"
 # }
-
-# variable "public_subnet_b_cidr" {
-#   default     = "90.90.20.0/24"
-#   description = "Default public subnet-b cidr block"
-# }
-
-# variable "private_subnet_a_cidr" {
-#   default     = "90.90.11.0/24"
-#   description = "Default private subnet-a cidr block"
-# }
-
-# variable "private_subnet_b_cidr" {
-#   default     = "90.90.21.0/24"
-#   description = "Default prviate subnet-b cidr block"
-# }
-
-variable "subnet_name_tag" {
-  default     = "aws_simaox"
-  description = "Default VPC cidr block"
-}
 
 variable "subnet_cidrs_public" {
   description = "Subnet CIDRs for public subnets (length must match configured availability_zones)"
@@ -50,7 +30,17 @@ variable "availability_zones" {
   type        = list(string)
 }
 
-variable "s3_bucket_1" {
+variable "s3_bucket_content" {
   default = "simaox-capstone-content-bucket"
+}
 
+variable "db_name" {
+  default = "database1"
+}
+variable "db_username" {
+  default = "admin"
+}
+
+variable "db_password" {
+  default = "admin1234"
 }

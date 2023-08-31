@@ -11,99 +11,40 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_vpc" "main_vpc" {
-  cidr_block           = var.vpc_cidr_block
-  instance_tenancy     = "default"
-  enable_dns_hostnames = true
+resource "aws_db_subnet_group" "db_subnet_group" {
+  name        = "${var.tag_name}_db_subnet_group"
+  description = "Subnets available for the RDS DB Instance"
+  subnet_ids = [
+    aws_subnet.private_subnet[0].id,
+    aws_subnet.private_subnet[1].id,
+  ]
   tags = {
-    Name = "${var.vpc_tag_name}"
+    Name = "${var.tag_name}_db_subnet_group"
   }
 }
 
-resource "aws_internet_gateway" "main_igw" {
-  vpc_id = aws_vpc.main_vpc.id
-
+resource "aws_db_instance" "default" {
+  allocated_storage           = 20
+  allow_major_version_upgrade = false
+  backup_retention_period     = 0
+  db_name                     = var.db_name
+  db_subnet_group_name        = aws_db_subnet_group.db_subnet_group.name 
+  delete_automated_backups = true
+  engine                   = "mysql"
+  engine_version           = "8.0.28"
+  instance_class           = "db.t2.micro"
+  identifier = "${lower(var.tag_name)}-db-instance"
+  username                 = var.db_username
+  password                 = var.db_password
+  maintenance_window       = "Mon:03:00-Mon:04:00"
+  max_allocated_storage    = 30
+  multi_az                 = false
+  port                     = 3306
+  # publicly_accessible = true
+  skip_final_snapshot    = true
+  # storage_encrypted      = true
+  vpc_security_group_ids = [aws_security_group.rds_sec_gr.id] 
   tags = {
-    Name = "aws_capstone_igw"
+    Name = "${var.tag_name}_db_instance"
   }
-}
-
-resource "aws_subnet" "public" {
-  count = length(var.subnet_cidrs_public)
-
-  vpc_id            = aws_vpc.main_vpc.id
-  cidr_block        = var.subnet_cidrs_public[count.index]
-  availability_zone = var.availability_zones[count.index]
-  tags = {
-    Name = "${var.subnet_name_tag}-public-subnet-${count.index}"
-  }
-}
-
-resource "aws_subnet" "private" {
-  count = length(var.subnet_cidrs_private)
-
-  vpc_id            = aws_vpc.main_vpc.id
-  cidr_block        = var.subnet_cidrs_private[count.index]
-  availability_zone = var.availability_zones[count.index]
-  tags = {
-    Name = "${var.subnet_name_tag}-private-subnet-${count.index}"
-  }
-}
-
-
-resource "aws_route_table" "main_public_rt" {
-  vpc_id = aws_vpc.main_vpc.id
-  route {
-    cidr_block = var.vpc_cidr_block
-    gateway_id = "local"
-  }
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.main_igw.id
-  }
-  tags = {
-    Name = "simaox-capstone-public-rt"
-  }
-}
-
-resource "aws_route_table_association" "rt_associate_public" {
-  count          = length(var.subnet_cidrs_public)
-  subnet_id      = element(aws_subnet.public.*.id, count.index)
-  route_table_id = aws_route_table.main_public_rt.id
-}
-
-resource "aws_route_table" "main_private_rt" {
-  vpc_id = aws_vpc.main_vpc.id
-  route {
-    cidr_block = var.vpc_cidr_block
-    gateway_id = "local"
-  }
-  tags = {
-    Name = "simaox-capstone-private-rt"
-  }
-}
-
-resource "aws_route_table_association" "rt_associate_private" {
-  count          = length(var.subnet_cidrs_private)
-  subnet_id      = element(aws_subnet.private.*.id, count.index)
-  route_table_id = aws_route_table.main_private_rt.id
-}
-
-resource "aws_vpc_endpoint" "vpc_endpoint_s3" {
-  vpc_id            = aws_vpc.main_vpc.id
-  service_name      = "com.amazonaws.us-east-1.s3"
-  vpc_endpoint_type = "Gateway"
-  depends_on = [aws_s3_bucket.s3_bucket_content]
-  tags = {
-    Name = "S3-vpc-endpoint-for-content-bucket"
-  }
-}
-
-resource "aws_vpc_endpoint_route_table_association" "rt_associate_s3_endpoint" {
-  route_table_id  = aws_route_table.main_private_rt.id
-  vpc_endpoint_id = aws_vpc_endpoint.vpc_endpoint_s3.id
-}
-
-resource "aws_s3_bucket" "s3_bucket_content" {
-  bucket = var.s3_bucket_1
 }
