@@ -87,8 +87,3 @@ resource "aws_vpc_endpoint_route_table_association" "rt_associate_s3_endpoint" {
   route_table_id  = aws_route_table.main_private_rt.id
   vpc_endpoint_id = aws_vpc_endpoint.vpc_endpoint_s3.id
 }
-
-resource "aws_s3_bucket" "s3_bucket_content" {
-  bucket = var.s3_bucket_content
-}
-

@@ -31,10 +31,10 @@ variable "availability_zones" {
 }
 
 variable "s3_bucket_content" {
-  default = "simaox-capstone-content-bucket"
+  default = "simaox-capstone-s3-bucket-content"
 }
 
-variable "db_name" {
+variable "rds_db_name" {
   default = "database1"
 }
 variable "db_username" {
