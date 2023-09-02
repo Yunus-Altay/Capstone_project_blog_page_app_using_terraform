@@ -44,3 +44,16 @@ variable "db_username" {
 variable "db_password" {
   default = "admin1234"
 }
+
+variable "operator_email" {
+  default = "yunusaltay.nl@gmail.com"
+}
+
+variable "root_domain_name" {
+  type    = string
+  default = "awsyunusaltaysx.net"
+}
+
+variable "existing_hosted_zone" {
+  default = "awsyunusaltaysx.net"
+}

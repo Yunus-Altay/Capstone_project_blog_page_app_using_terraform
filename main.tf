@@ -143,7 +143,7 @@ resource "aws_lambda_function" "lambda_dynamodb_function" {
 }
 
 resource "aws_iam_role" "lambda_role" {
-  name = "test_role"
+  name = "${var.tag_name}-lambda-role"
 
   # Terraform's "jsonencode" function converts a
   # Terraform expression result to valid JSON syntax.
@@ -153,7 +153,7 @@ resource "aws_iam_role" "lambda_role" {
       {
         Action = "sts:AssumeRole",
         Effect = "Allow",
-        Sid    = "",
+        # Sid    = "",
         Principal = {
           Service = "lambda.amazonaws.com"
         }
@@ -214,3 +214,228 @@ resource "aws_iam_role" "lambda_role" {
     tag-key = "tag-value"
   }
 }
+
+resource "aws_alb" "app_lb" {
+  name               = "${var.tag_name}-lb-tf"
+  ip_address_type    = "ipv4"
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb_sec_gr.id]
+  subnets            = [
+    aws_subnet.public_subnet[0].id,
+    aws_subnet.public_subnet[1].id,
+  ]
+  tags = {
+    Name = "${var.tag_name}-lb-tf"
+  }
+}
+
+resource "aws_alb_target_group" "app_lb_tg" {
+  name        = "${var.tag_name}-lb-tg"
+  port        = 80
+  protocol    = "HTTP"
+  vpc_id      = aws_vpc.main_vpc.id
+  target_type = "instance"
+
+  health_check {
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+  tags = {
+    Name = "${var.tag_name}-lb-tf"
+  }
+}
+
+data "aws_ami" "al2023" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+
+  filter {
+    name   = "architecture"
+    values = ["x86_64"]
+  }
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-2023*"]
+  }
+}
+
+resource "aws_alb_listener" "app_listener_http" {
+  load_balancer_arn = aws_alb.app_lb.arn
+  port              = 80
+  protocol          = "HTTP"
+  default_action {
+    type             = "redirect"
+    redirect {
+      port        = "443"
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
+      # host = "#{host}"
+      # path = "/#{path}"
+      # query = "#{query}"
+  }
+  tags = {
+    Name = "${var.tag_name}-listener-http"
+  }
+}
+
+resource "aws_alb_listener" "app_listener_https" {
+  load_balancer_arn = aws_alb.app_lb.arn
+  port              = 443
+  protocol          = "HTTPS"
+  certificate_arn = aws_acm_certificate.certificate.arn
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_alb_target_group.app_lb_tg.arn
+  }
+  tags = {
+    Name = "${var.tag_name}-listener-https"
+  }
+}
+
+# "${join("", ["*.", split(".", var.domain_name)[1], ".", split(".", var.domain_name)[2]])}"
+
+# resource "aws_route53_zone" "r53_zone" {
+#   name = var.root_domain_name
+# }
+
+data "aws_route53_zone" "selected" {
+  name         = var.existing_hosted_zone
+  private_zone = false
+}
+
+resource "aws_acm_certificate" "certificate" {
+  domain_name       = var.root_domain_name
+  validation_method = "DNS"
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_route53_record" "cert_dns" {
+  allow_overwrite = true
+  name            = tolist(aws_acm_certificate.certificate.domain_validation_options)[0].resource_record_name
+  records         = [tolist(aws_acm_certificate.certificate.domain_validation_options)[0].resource_record_value]
+  type            = tolist(aws_acm_certificate.certificate.domain_validation_options)[0].resource_record_type
+  zone_id         = data.aws_route53_zone.selected.zone_id
+  ttl             = 60
+}
+
+resource "aws_acm_certificate_validation" "hello_cert_validate" {
+  certificate_arn         = aws_acm_certificate.certificate.arn
+  validation_record_fqdns = [aws_route53_record.cert_dns.fqdn]
+}
+
+resource "aws_iam_role" "lt_role" {
+  name               = "${var.tag_name}-lt-role"
+  path               = "/"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Action = "sts:AssumeRole",
+        Effect = "Allow",
+        # Sid    = "",
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+      },
+    ]
+  })
+  managed_policy_arns = [
+    "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+    "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+  ]
+}
+
+resource "aws_iam_instance_profile" "lt_role_profile" {
+  name = "${var.tag_name}-lt-role-profile"
+  role = aws_iam_role.role.name
+  path = "/"
+}
+
+resource "aws_launch_template" "asg_lt" {
+  name                   = "${var.tag_name}-lt"
+  image_id               = data.aws_ami.al2023.id
+  iam_instance_profile = {
+    name = "${var.tag_name}-lt-role-profile"
+  }
+  instance_type          = "t2.micro"
+  key_name               = var.key-name
+  vpc_security_group_ids = [aws_security_group.ec2_sec_gr.id]
+  user_data              = base64encode(templatefile("user-data.sh", { user-data-git-token = var.git-token, user-data-git-name = var.git-name })) # ??
+  depends_on             = [github_repository_file.dbendpoint]
+  tag_specifications {
+    resource_type = "instance"
+    tags = {
+      Name = "${var.tag_name}-lt"
+    }
+  }
+}
+
+resource "aws_autoscaling_group" "app_asg" {
+  default_cooldown = 200
+  max_size                  = 4
+  min_size                  = 1
+  desired_capacity          = 2
+  name                      = "${var.tag_name}-lt-asg"
+  health_check_grace_period = 300
+  health_check_type         = "ELB"
+  target_group_arns         = [aws_alb_target_group.app_lb_tg.arn]
+  vpc_zone_identifier       = [
+    aws_subnet.private_subnet[0].id,
+    aws_subnet.private_subnet[1].id,
+  ]
+  launch_template {
+    id      = aws_launch_template.asg_lt.id
+    version = aws_launch_template.asg_lt.latest_version
+  }
+  tags = {
+    Name = "${var.tag_name}-lt-asg"
+  }
+}
+
+resource "aws_autoscaling_policy" "asg_policy" {
+  autoscaling_group_name = aws_autoscaling_group.app_asg.group_names
+  name                   = "${var.tag_name}-asg-policy"
+  policy_type            = "TargetTrackingScaling"
+  target_tracking_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ASGAverageCPUUtilization"
+    }
+    target_value = 70.0
+  }
+}
+
+resource "aws_autoscaling_notification" "asg_notifications" {
+  group_names = [
+    aws_autoscaling_group.app_asg.name
+  ]
+
+  notifications = [
+    "autoscaling:EC2_INSTANCE_LAUNCH",
+    "autoscaling:EC2_INSTANCE_TERMINATE",
+    "autoscaling:EC2_INSTANCE_LAUNCH_ERROR",
+    "autoscaling:EC2_INSTANCE_TERMINATE_ERROR",
+  ]
+
+  topic_arn = aws_sns_topic.sns_topic.arn 
+}
+
+resource "aws_sns_topic" "sns_topic" {
+  name = "server-status-change"
+}
+
+resource "aws_sns_topic_subscription" "EmailSubscription" {
+  topic_arn = aws_sns_topic.sns_topic.arn
+  protocol  = "email"
+  endpoint  = var.operator_email 
+}
+
+
+    
