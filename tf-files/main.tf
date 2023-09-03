@@ -51,6 +51,7 @@ resource "aws_db_instance" "db_instance" {
 
 resource "aws_s3_bucket" "s3_bucket_content" {
   bucket = var.s3_bucket_content
+  force_destroy = true
 
   tags = {
     Name        = "${var.tag_name}-s3-bucket-content"
@@ -95,6 +96,68 @@ resource "aws_s3_bucket_notification" "bucket_notification" {
   depends_on = [aws_lambda_permission.allow_bucket]
 }
 
+resource "aws_s3_bucket" "s3_bucket_failover" {
+  bucket = var.s3_bucket_failover
+  force_destroy = true
+
+  tags = {
+    Name        = "${var.tag_name}-s3-bucket-failover"
+  }
+}
+
+resource "aws_s3_bucket_policy" "public_read_policy" {
+  bucket = aws_s3_bucket.s3_bucket_failover.id
+  policy = data.template_file.s3_policy.rendered
+}
+
+data "template_file" "s3_policy" {
+  template = file("${path.module}/aws-s3-static-website-policy.json")
+  vars = {
+    failover_bucket_name = aws_s3_bucket.s3_bucket_failover.id
+  }
+}
+
+resource "aws_s3_bucket_ownership_controls" "bucket_failover_ownership" {
+  bucket = aws_s3_bucket.s3_bucket_failover.id
+  rule {
+    object_ownership = "BucketOwnerPreferred"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "bucket_failover_public_access_block" {
+  bucket = aws_s3_bucket.s3_bucket_failover.id
+
+  block_public_acls       = false
+  block_public_policy     = false
+  ignore_public_acls      = false
+  restrict_public_buckets = false
+}
+
+resource "aws_s3_bucket_acl" "bucket_content_acl" {
+  depends_on = [
+    aws_s3_bucket_ownership_controls.bucket_failover_ownership,
+    aws_s3_bucket_public_access_block.bucket_failover_public_access_block,
+  ]
+
+  bucket = aws_s3_bucket.s3_bucket_failover.id
+  acl    = "public-read"
+}
+
+resource "aws_s3_object" "object" {
+  count  = length(var.files_to_upload)
+  bucket = aws_s3_bucket.s3_bucket_failover.id
+  key    = basename(var.files_to_upload[count.index])
+  source = var.files_to_upload[count.index]
+}
+
+resource "aws_s3_bucket_website_configuration" "bucket_website_config" {
+  bucket = aws_s3_bucket.s3_bucket_failover.id
+
+  index_document {
+    suffix = "index.html"
+  }
+}
+
 data "aws_caller_identity" "current" {}
 output "account_id" {
   value = data.aws_caller_identity.current.account_id
@@ -114,7 +177,7 @@ resource "aws_lambda_permission" "allow_bucket" {
 }
 
 resource "local_file" "config" {
-  content  = templatefile("${path.module}/lambda.py", { dynamo-db-name = ""}) # dynamo-db-name
+  content  = templatefile("${path.module}/lambda.py", { dynamo-db-name = "${var.tag_name}-dynamodb-table"}) 
   filename = "${path.module}/lambda.py"
 }
 
@@ -137,7 +200,7 @@ resource "aws_lambda_function" "lambda_dynamodb_function" {
   runtime       = "python3.8"
 
   depends_on = [
-    aws_dynamodb_table.my_dynamo_db,
+    aws_dynamodb_table.dynamodb_table,
     archive_file.lambdazip
     ]
 }
@@ -209,9 +272,37 @@ resource "aws_iam_role" "lambda_role" {
       ]
     })
   }
+}
 
+data "aws_ami" "nat_instance_ami" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+
+  filter {
+    name   = "architecture"
+    values = ["x86_64"]
+  }
+
+  filter {
+    name   = "name"
+    values = ["amzn-ami-vpc-nat-*"]
+  }
+}
+
+resource "aws_instance" "web" {
+  ami           = data.aws_ami.nat_instance_ami.id
+  instance_type = "t2.micro"
+  source_dest_check = false
+  security_groups = [aws_security_group.nat_instance_sec_gr.id]
+  key_name = var.key_name
+  subnet_id = aws_subnet.public_subnet[0].id
   tags = {
-    tag-key = "tag-value"
+    Name = "${var.tag_name}-NAT-instance"
   }
 }
 
@@ -236,22 +327,27 @@ resource "aws_alb_target_group" "app_lb_tg" {
   vpc_id      = aws_vpc.main_vpc.id
   target_type = "instance"
 
-  health_check {
-    healthy_threshold   = 2
-    unhealthy_threshold = 3
-  }
+  # health_check {
+  #   healthy_threshold   = 2
+  #   unhealthy_threshold = 3
+  # }
   tags = {
     Name = "${var.tag_name}-lb-tf"
   }
 }
 
-data "aws_ami" "al2023" {
+data "aws_ami" "ubuntu_ami" {
   most_recent = true
-  owners      = ["amazon"]
+  owners      = ["099720109477"]
 
   filter {
     name   = "virtualization-type"
     values = ["hvm"]
+  }
+
+  filter {
+    name   = "ena-support"
+    values = true
   }
 
   filter {
@@ -261,7 +357,7 @@ data "aws_ami" "al2023" {
 
   filter {
     name   = "name"
-    values = ["al2023-ami-2023*"]
+    values = ["Ubuntu Server 22.04 LTS (HVM), SSD Volume Type*"]
   }
 }
 
@@ -301,7 +397,7 @@ resource "aws_alb_listener" "app_listener_https" {
 # "${join("", ["*.", split(".", var.domain_name)[1], ".", split(".", var.domain_name)[2]])}"
 
 # resource "aws_route53_zone" "r53_zone" {
-#   name = var.root_domain_name
+#   name = var.domain_name
 # }
 
 data "aws_route53_zone" "selected" {
@@ -310,7 +406,7 @@ data "aws_route53_zone" "selected" {
 }
 
 resource "aws_acm_certificate" "certificate" {
-  domain_name       = var.root_domain_name
+  domain_name       = var.domain_name
   validation_method = "DNS"
   lifecycle {
     create_before_destroy = true
@@ -361,15 +457,22 @@ resource "aws_iam_instance_profile" "lt_role_profile" {
 
 resource "aws_launch_template" "asg_lt" {
   name                   = "${var.tag_name}-lt"
-  image_id               = data.aws_ami.al2023.id
+  image_id               = data.aws_ami.ubuntu_ami.id
   iam_instance_profile = {
     name = "${var.tag_name}-lt-role-profile"
   }
   instance_type          = "t2.micro"
-  key_name               = var.key-name
+  key_name               = var.key_name
   vpc_security_group_ids = [aws_security_group.ec2_sec_gr.id]
-  user_data              = base64encode(templatefile("user-data.sh", { user-data-git-token = var.git-token, user-data-git-name = var.git-name })) # ??
-  depends_on             = [github_repository_file.dbendpoint]
+  user_data              = base64encode(templatefile("user-data.sh", {
+    user-data-git-token = var.git-token,
+    rds_db_name = var.rds_db_name,
+    db_username = var.db_username,
+    db_endpoint = aws_db_instance.db_instance.address,
+    content_bucket_name = aws_s3_bucket.s3_bucket_content.id,
+    content_bucket_region = var.content_bucket_region
+     })) # ??
+  depends_on             = [aws_db_instance.db_instance]
   tag_specifications {
     resource_type = "instance"
     tags = {
@@ -437,5 +540,112 @@ resource "aws_sns_topic_subscription" "EmailSubscription" {
   endpoint  = var.operator_email 
 }
 
+locals {
+  alb_origin_id = "myALBOrigin"
+}
 
+resource "aws_cloudfront_distribution" "alb_cf_distro" {
+  origin {
+    domain_name              = aws_alb.app_lb.dns_name
+    origin_id                = local.alb_origin_id
+    custom_origin_config {
+      origin_keepalive_timeout = 5
+      origin_ssl_protocols = ["TLSv1"]
+      http_port = 80
+      https_port = 443
+      origin_protocol_policy = "match-viewer"
+    }
+  }
+  enabled             = true
+  aliases =  [var.domain_name]
+  comment             = "Cloudfront Distribution pointing to ALBDNS"
+
+  default_cache_behavior {
+    allowed_methods  = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
+    cached_methods   = ["GET", "HEAD", "OPTIONS"]
+    target_origin_id = local.alb_origin_id
+    smooth_streaming = false
+    forwarded_values {
+      query_string = true
+      headers = ["Host",
+      "Accept",
+      "Accept-Charset",
+      "Accept-Datetime",
+      "Accept-Encoding",
+      "Accept-Language",
+      "Authorization",
+      "Cloudfront-Forwarded-Proto",
+      "Origin", "Referrer"]
+      cookies {
+        forward = "all"
+      }
+    }
+    compress = true
+    viewer_protocol_policy = "redirect-to-https"
+  }
+  price_class = "PriceClass_All"
+  viewer_certificate {
+    acm_certificate_arn = aws_acm_certificate.certificate.arn
+    ssl_support_method = "sni-only"
+  tags = {
+    Name = "${var.tag_name}-cf-distro"
+  }
+}
+
+resource "aws_dynamodb_table" "dynamodb_table" {
+  name           = "${var.tag_name}-dynamodb-table"
+  read_capacity  = 3
+  write_capacity = 3
+  hash_key       = "id"
+
+  attribute {
+    name = "id"
+    type = "S"
+  }
+
+  tags = {
+    Name        = "${var.tag_name}-dynamodb-table"
+  }
+}
     
+resource "aws_route53_health_check" "r53_health_check" {
+  fqdn              = aws_cloudfront_distribution.alb_cf_distro.domain_name
+  port              = 443
+  type              = "HTTPS"
+  failure_threshold = "3"
+  request_interval  = "30"
+
+  tags = {
+    Name = "${var.tag_name}-r53_health_check"
+  }
+}
+
+resource "aws_route53_record" "primary" {
+  zone_id = data.aws_route53_zone.selected.zone_id
+  name    = var.domain_name
+  type    = "A"
+  health_check_id = aws_route53_health_check.r53_health_check.id
+  alias {
+    name                   = aws_alb.app_lb.dns_name
+    zone_id                = aws_alb.app_lb.id
+    evaluate_target_health = true
+  }
+  failover_routing_policy {
+    type = "PRIMARY"
+  }
+}
+
+resource "aws_route53_record" "secondary" {
+  zone_id = data.aws_route53_zone.selected.zone_id
+  name    = var.domain_name
+  type    = "A"
+  health_check_id = aws_route53_health_check.r53_health_check.id
+  alias {
+    name                   = aws_s3_bucket.s3_bucket_failover.website_endpoint
+    zone_id                = aws_s3_bucket_website_configuration.bucket_website_config.hosted_zone_id
+    evaluate_target_health = true
+  }
+  failover_routing_policy {
+    type = "SECONDARY"
+  }
+}
