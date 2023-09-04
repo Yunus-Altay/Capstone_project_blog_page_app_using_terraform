@@ -28,33 +28,33 @@ resource "aws_db_instance" "db_instance" {
   allow_major_version_upgrade = false
   backup_retention_period     = 0
   db_name                     = var.rds_db_name
-  db_subnet_group_name        = aws_db_subnet_group.db_subnet_group.name 
-  delete_automated_backups = true
-  engine                   = "mysql"
-  engine_version           = "8.0.28"
-  instance_class           = "db.t2.micro"
-  identifier = "${lower(var.tag_name)}-db-instance"
-  username                 = var.db_username
-  password                 = var.db_password
-  maintenance_window       = "Mon:03:00-Mon:04:00"
-  max_allocated_storage    = 30
-  multi_az                 = false
-  port                     = 3306
+  db_subnet_group_name        = aws_db_subnet_group.db_subnet_group.name
+  delete_automated_backups    = true
+  engine                      = "mysql"
+  engine_version              = "8.0.28"
+  instance_class              = "db.t2.micro"
+  identifier                  = "${lower(var.tag_name)}-db-instance"
+  username                    = var.db_username
+  password                    = var.db_password
+  maintenance_window          = "Mon:03:00-Mon:04:00"
+  max_allocated_storage       = 30
+  multi_az                    = false
+  port                        = 3306
   # publicly_accessible = true
-  skip_final_snapshot    = true
+  skip_final_snapshot = true
   # storage_encrypted      = true
-  vpc_security_group_ids = [aws_security_group.rds_sec_gr.id] 
+  vpc_security_group_ids = [aws_security_group.rds_sec_gr.id]
   tags = {
     Name = "${var.tag_name}_db_instance"
   }
 }
 
 resource "aws_s3_bucket" "s3_bucket_content" {
-  bucket = var.s3_bucket_content
+  bucket        = var.s3_bucket_content
   force_destroy = true
 
   tags = {
-    Name        = "${var.tag_name}-s3-bucket-content"
+    Name = "${var.tag_name}-s3-bucket-content"
   }
 }
 
@@ -85,7 +85,7 @@ resource "aws_s3_bucket_acl" "bucket_content_acl" {
 }
 
 resource "aws_s3_bucket_notification" "bucket_notification" {
-  bucket = aws_s3_bucket.bucket.id
+  bucket = aws_s3_bucket.s3_bucket_content.id
 
   lambda_function {
     lambda_function_arn = aws_lambda_function.lambda_dynamodb_function.arn
@@ -97,17 +97,18 @@ resource "aws_s3_bucket_notification" "bucket_notification" {
 }
 
 resource "aws_s3_bucket" "s3_bucket_failover" {
-  bucket = var.s3_bucket_failover
+  bucket        = var.s3_bucket_failover
   force_destroy = true
 
   tags = {
-    Name        = "${var.tag_name}-s3-bucket-failover"
+    Name = "${var.tag_name}-s3-bucket-failover"
   }
 }
 
 resource "aws_s3_bucket_policy" "public_read_policy" {
   bucket = aws_s3_bucket.s3_bucket_failover.id
   policy = data.template_file.s3_policy.rendered
+  depends_on = [aws_s3_bucket_public_access_block.bucket_failover_public_access_block]
 }
 
 data "template_file" "s3_policy" {
@@ -122,6 +123,7 @@ resource "aws_s3_bucket_ownership_controls" "bucket_failover_ownership" {
   rule {
     object_ownership = "BucketOwnerPreferred"
   }
+  depends_on = [aws_s3_bucket_public_access_block.bucket_failover_public_access_block]
 }
 
 resource "aws_s3_bucket_public_access_block" "bucket_failover_public_access_block" {
@@ -133,7 +135,7 @@ resource "aws_s3_bucket_public_access_block" "bucket_failover_public_access_bloc
   restrict_public_buckets = false
 }
 
-resource "aws_s3_bucket_acl" "bucket_content_acl" {
+resource "aws_s3_bucket_acl" "bucket_failover_acl" {
   depends_on = [
     aws_s3_bucket_ownership_controls.bucket_failover_ownership,
     aws_s3_bucket_public_access_block.bucket_failover_public_access_block,
@@ -164,20 +166,20 @@ output "account_id" {
 }
 
 locals {
-    account_id = data.aws_caller_identity.current.account_id
+  account_id = data.aws_caller_identity.current.account_id
 }
 
 resource "aws_lambda_permission" "allow_bucket" {
-  statement_id  = "AllowExecutionFromS3Bucket"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.lambda_dynamodb_function.arn
-  principal     = "s3.amazonaws.com"
-  source_arn    = aws_s3_bucket.s3_bucket_content.arn
+  statement_id   = "AllowExecutionFromS3Bucket"
+  action         = "lambda:InvokeFunction"
+  function_name  = aws_lambda_function.lambda_dynamodb_function.arn
+  principal      = "s3.amazonaws.com"
+  source_arn     = aws_s3_bucket.s3_bucket_content.arn
   source_account = local.account_id
 }
 
 resource "local_file" "config" {
-  content  = templatefile("${path.module}/lambda.py", { dynamo-db-name = "${var.tag_name}-dynamodb-table"}) 
+  content  = templatefile("${path.module}/lambda.py", { dynamo-db-name = "${var.tag_name}-dynamodb-table" })
   filename = "${path.module}/lambda.py"
 }
 
@@ -192,7 +194,7 @@ data "archive_file" "lambdazip" {
 }
 
 resource "aws_lambda_function" "lambda_dynamodb_function" {
-  description = "S3-dynamoDB lambda function"
+  description   = "S3-dynamoDB lambda function"
   filename      = "lambda_function_payload.zip"
   function_name = "S3DynamoLambda"
   role          = aws_iam_role.lambda_role.arn
@@ -201,8 +203,8 @@ resource "aws_lambda_function" "lambda_dynamodb_function" {
 
   depends_on = [
     aws_dynamodb_table.dynamodb_table,
-    archive_file.lambdazip
-    ]
+    data.archive_file.lambdazip
+  ]
 }
 
 resource "aws_iam_role" "lambda_role" {
@@ -238,7 +240,7 @@ resource "aws_iam_role" "lambda_role" {
       Version = "2012-10-17",
       Statement = [
         {
-          Action   = [
+          Action = [
             "dynamodb:GetItem",
             "dynamodb:PutItem",
             "dynamodb:UpdateItem"
@@ -256,7 +258,7 @@ resource "aws_iam_role" "lambda_role" {
       Version = "2012-10-17",
       Statement = [
         {
-          Action   = [
+          Action = [
             "s3:PutObject",
             "s3:GetObject",
             "s3:GetObjectVersion"
@@ -294,24 +296,26 @@ data "aws_ami" "nat_instance_ami" {
   }
 }
 
-resource "aws_instance" "web" {
-  ami           = data.aws_ami.nat_instance_ami.id
-  instance_type = "t2.micro"
+resource "aws_instance" "nat_instance" {
+  ami               = data.aws_ami.nat_instance_ami.id
+  instance_type     = "t2.micro"
   source_dest_check = false
-  security_groups = [aws_security_group.nat_instance_sec_gr.id]
-  key_name = var.key_name
-  subnet_id = aws_subnet.public_subnet[0].id
+  security_groups   = [aws_security_group.nat_instance_sec_gr.id]
+  key_name          = var.key_name
+  subnet_id         = aws_subnet.public_subnet[0].id
   tags = {
     Name = "${var.tag_name}-NAT-instance"
   }
+  
 }
+
 
 resource "aws_alb" "app_lb" {
   name               = "${var.tag_name}-lb-tf"
   ip_address_type    = "ipv4"
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sec_gr.id]
-  subnets            = [
+  subnets = [
     aws_subnet.public_subnet[0].id,
     aws_subnet.public_subnet[1].id,
   ]
@@ -344,20 +348,17 @@ data "aws_ami" "ubuntu_ami" {
     name   = "virtualization-type"
     values = ["hvm"]
   }
-
-  filter {
-    name   = "ena-support"
-    values = true
-  }
-
   filter {
     name   = "architecture"
     values = ["x86_64"]
   }
-
   filter {
     name   = "name"
-    values = ["Ubuntu Server 22.04 LTS (HVM), SSD Volume Type*"]
+    values = ["ubuntu/images/hvm-ssd/ubuntu*"]
+  }
+  filter {
+    name   = "image-id"
+    values = ["ami-053b0d53c279acc90"]
   }
 }
 
@@ -366,7 +367,7 @@ resource "aws_alb_listener" "app_listener_http" {
   port              = 80
   protocol          = "HTTP"
   default_action {
-    type             = "redirect"
+    type = "redirect"
     redirect {
       port        = "443"
       protocol    = "HTTPS"
@@ -374,17 +375,18 @@ resource "aws_alb_listener" "app_listener_http" {
       # host = "#{host}"
       # path = "/#{path}"
       # query = "#{query}"
+    }
   }
   tags = {
-    Name = "${var.tag_name}-listener-http"
-  }
+      Name = "${var.tag_name}-listener-http"
+    }
 }
 
 resource "aws_alb_listener" "app_listener_https" {
   load_balancer_arn = aws_alb.app_lb.arn
   port              = 443
   protocol          = "HTTPS"
-  certificate_arn = aws_acm_certificate.certificate.arn
+  certificate_arn   = aws_acm_certificate.certificate.arn
   default_action {
     type             = "forward"
     target_group_arn = aws_alb_target_group.app_lb_tg.arn
@@ -428,8 +430,8 @@ resource "aws_acm_certificate_validation" "hello_cert_validate" {
 }
 
 resource "aws_iam_role" "lt_role" {
-  name               = "${var.tag_name}-lt-role"
-  path               = "/"
+  name = "${var.tag_name}-lt-role"
+  path = "/"
   assume_role_policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
@@ -451,28 +453,32 @@ resource "aws_iam_role" "lt_role" {
 
 resource "aws_iam_instance_profile" "lt_role_profile" {
   name = "${var.tag_name}-lt-role-profile"
-  role = aws_iam_role.role.name
+  role = aws_iam_role.lt_role.name
   path = "/"
 }
 
 resource "aws_launch_template" "asg_lt" {
-  name                   = "${var.tag_name}-lt"
-  image_id               = data.aws_ami.ubuntu_ami.id
-  iam_instance_profile = {
+  name     = "${var.tag_name}-lt"
+  image_id = data.aws_ami.ubuntu_ami.id
+  iam_instance_profile {
     name = "${var.tag_name}-lt-role-profile"
   }
   instance_type          = "t2.micro"
   key_name               = var.key_name
   vpc_security_group_ids = [aws_security_group.ec2_sec_gr.id]
-  user_data              = base64encode(templatefile("user-data.sh", {
-    user-data-git-token = var.git-token,
-    rds_db_name = var.rds_db_name,
-    db_username = var.db_username,
-    db_endpoint = aws_db_instance.db_instance.address,
-    content_bucket_name = aws_s3_bucket.s3_bucket_content.id,
-    content_bucket_region = var.content_bucket_region
-     })) # ??
-  depends_on             = [aws_db_instance.db_instance]
+  user_data = base64encode(templatefile("user-data.sh", {
+    user-data-git-token   = var.git-token,
+    rds_db_name           = var.rds_db_name,
+    db_username           = var.db_username,
+    db_endpoint           = aws_db_instance.db_instance.address,
+    content_bucket_name   = aws_s3_bucket.s3_bucket_content.id,
+    content_bucket_region = var.content_bucket_region,
+    db_password           = var.db_password
+  }))
+  depends_on = [
+    aws_db_instance.db_instance,
+    aws_route.outbound-nat-route
+  ]
   tag_specifications {
     resource_type = "instance"
     tags = {
@@ -482,7 +488,7 @@ resource "aws_launch_template" "asg_lt" {
 }
 
 resource "aws_autoscaling_group" "app_asg" {
-  default_cooldown = 200
+  default_cooldown          = 200
   max_size                  = 4
   min_size                  = 1
   desired_capacity          = 2
@@ -490,21 +496,23 @@ resource "aws_autoscaling_group" "app_asg" {
   health_check_grace_period = 300
   health_check_type         = "ELB"
   target_group_arns         = [aws_alb_target_group.app_lb_tg.arn]
-  vpc_zone_identifier       = [
+  vpc_zone_identifier = [
     aws_subnet.private_subnet[0].id,
     aws_subnet.private_subnet[1].id,
   ]
+  tag {
+    key                 = "Name"
+    value               = "${var.tag_name}-lt-asg"
+    propagate_at_launch = true
+  }
   launch_template {
     id      = aws_launch_template.asg_lt.id
     version = aws_launch_template.asg_lt.latest_version
   }
-  tags = {
-    Name = "${var.tag_name}-lt-asg"
-  }
 }
 
 resource "aws_autoscaling_policy" "asg_policy" {
-  autoscaling_group_name = aws_autoscaling_group.app_asg.group_names
+  autoscaling_group_name = aws_autoscaling_group.app_asg.name
   name                   = "${var.tag_name}-asg-policy"
   policy_type            = "TargetTrackingScaling"
   target_tracking_configuration {
@@ -527,38 +535,38 @@ resource "aws_autoscaling_notification" "asg_notifications" {
     "autoscaling:EC2_INSTANCE_TERMINATE_ERROR",
   ]
 
-  topic_arn = aws_sns_topic.sns_topic.arn 
+  topic_arn = aws_sns_topic.sns_topic.arn
 }
 
 resource "aws_sns_topic" "sns_topic" {
   name = "server-status-change"
 }
 
-resource "aws_sns_topic_subscription" "EmailSubscription" {
-  topic_arn = aws_sns_topic.sns_topic.arn
-  protocol  = "email"
-  endpoint  = var.operator_email 
-}
-
 locals {
   alb_origin_id = "myALBOrigin"
 }
 
+resource "aws_sns_topic_subscription" "EmailSubscription" {
+  topic_arn = aws_sns_topic.sns_topic.arn
+  protocol  = "email"
+  endpoint  = var.operator_email
+}
+
 resource "aws_cloudfront_distribution" "alb_cf_distro" {
   origin {
-    domain_name              = aws_alb.app_lb.dns_name
-    origin_id                = local.alb_origin_id
+    domain_name = aws_alb.app_lb.dns_name
+    origin_id   = local.alb_origin_id
     custom_origin_config {
       origin_keepalive_timeout = 5
-      origin_ssl_protocols = ["TLSv1"]
-      http_port = 80
-      https_port = 443
-      origin_protocol_policy = "match-viewer"
+      origin_ssl_protocols     = ["TLSv1"]
+      http_port                = 80
+      https_port               = 443
+      origin_protocol_policy   = "match-viewer"
     }
   }
-  enabled             = true
-  aliases =  [var.domain_name]
-  comment             = "Cloudfront Distribution pointing to ALBDNS"
+  enabled = true
+  aliases = [var.domain_name]
+  comment = "Cloudfront Distribution pointing to ALBDNS"
 
   default_cache_behavior {
     allowed_methods  = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
@@ -568,28 +576,35 @@ resource "aws_cloudfront_distribution" "alb_cf_distro" {
     forwarded_values {
       query_string = true
       headers = ["Host",
-      "Accept",
-      "Accept-Charset",
-      "Accept-Datetime",
-      "Accept-Encoding",
-      "Accept-Language",
-      "Authorization",
-      "Cloudfront-Forwarded-Proto",
+        "Accept",
+        "Accept-Charset",
+        "Accept-Datetime",
+        "Accept-Encoding",
+        "Accept-Language",
+        "Authorization",
+        "Cloudfront-Forwarded-Proto",
       "Origin", "Referrer"]
       cookies {
         forward = "all"
       }
     }
-    compress = true
+    compress               = true
     viewer_protocol_policy = "redirect-to-https"
   }
   price_class = "PriceClass_All"
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+      locations        = []
+    }
+  }
   viewer_certificate {
     acm_certificate_arn = aws_acm_certificate.certificate.arn
-    ssl_support_method = "sni-only"
-  tags = {
-    Name = "${var.tag_name}-cf-distro"
+    ssl_support_method  = "sni-only"
   }
+  tags = {
+      Name = "${var.tag_name}-cf-distro"
+    }
 }
 
 resource "aws_dynamodb_table" "dynamodb_table" {
@@ -604,10 +619,10 @@ resource "aws_dynamodb_table" "dynamodb_table" {
   }
 
   tags = {
-    Name        = "${var.tag_name}-dynamodb-table"
+    Name = "${var.tag_name}-dynamodb-table"
   }
 }
-    
+
 resource "aws_route53_health_check" "r53_health_check" {
   fqdn              = aws_cloudfront_distribution.alb_cf_distro.domain_name
   port              = 443
@@ -621,13 +636,14 @@ resource "aws_route53_health_check" "r53_health_check" {
 }
 
 resource "aws_route53_record" "primary" {
-  zone_id = data.aws_route53_zone.selected.zone_id
-  name    = var.domain_name
-  type    = "A"
+  zone_id         = data.aws_route53_zone.selected.zone_id
+  name            = var.domain_name
+  type            = "A"
   health_check_id = aws_route53_health_check.r53_health_check.id
+  set_identifier = "www1"
   alias {
     name                   = aws_alb.app_lb.dns_name
-    zone_id                = aws_alb.app_lb.id
+    zone_id                = aws_alb.app_lb.zone_id
     evaluate_target_health = true
   }
   failover_routing_policy {
@@ -636,13 +652,14 @@ resource "aws_route53_record" "primary" {
 }
 
 resource "aws_route53_record" "secondary" {
-  zone_id = data.aws_route53_zone.selected.zone_id
-  name    = var.domain_name
-  type    = "A"
+  zone_id         = data.aws_route53_zone.selected.zone_id
+  name            = var.domain_name
+  type            = "A"
   health_check_id = aws_route53_health_check.r53_health_check.id
+  set_identifier = "www2"
   alias {
-    name                   = aws_s3_bucket.s3_bucket_failover.website_endpoint
-    zone_id                = aws_s3_bucket_website_configuration.bucket_website_config.hosted_zone_id
+    name                   = aws_s3_bucket_website_configuration.bucket_website_config.website_domain 
+    zone_id                = aws_s3_bucket.s3_bucket_failover.hosted_zone_id
     evaluate_target_health = true
   }
   failover_routing_policy {
