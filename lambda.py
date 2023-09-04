@@ -14,7 +14,7 @@ def lambda_handler(event, context):
         filename2 = filename1[-1]
         
         dynamo_db = boto3.resource('dynamodb')
-        dynamoTable = dynamo_db.Table('{dynamo-db-name}')
+        dynamoTable = dynamo_db.Table('${dynamo-db-name}')
         
         dynamoTable.put_item(Item = {
             'id': filename2,
@@ -22,4 +22,4 @@ def lambda_handler(event, context):
             'Event': event_name,
         })
         
-    return "Lammda success"
+    return "Lamdda success"
