@@ -94,5 +94,5 @@ resource "aws_route" "outbound-nat-route" {
   route_table_id         = aws_route_table.main_private_rt.id
   destination_cidr_block = "0.0.0.0/0"
   network_interface_id   = aws_instance.nat_instance.primary_network_interface_id
-  depends_on = [aws_instance.nat_instance]
+  depends_on             = [aws_instance.nat_instance]
 }

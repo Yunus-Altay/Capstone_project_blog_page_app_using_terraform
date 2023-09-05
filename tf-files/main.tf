@@ -106,8 +106,8 @@ resource "aws_s3_bucket" "s3_bucket_failover" {
 }
 
 resource "aws_s3_bucket_policy" "public_read_policy" {
-  bucket = aws_s3_bucket.s3_bucket_failover.id
-  policy = data.template_file.s3_policy.rendered
+  bucket     = aws_s3_bucket.s3_bucket_failover.id
+  policy     = data.template_file.s3_policy.rendered
   depends_on = [aws_s3_bucket_public_access_block.bucket_failover_public_access_block]
 }
 
@@ -306,7 +306,7 @@ resource "aws_instance" "nat_instance" {
   tags = {
     Name = "${var.tag_name}-NAT-instance"
   }
-  
+
 }
 
 
@@ -378,8 +378,8 @@ resource "aws_alb_listener" "app_listener_http" {
     }
   }
   tags = {
-      Name = "${var.tag_name}-listener-http"
-    }
+    Name = "${var.tag_name}-listener-http"
+  }
 }
 
 resource "aws_alb_listener" "app_listener_https" {
@@ -603,8 +603,8 @@ resource "aws_cloudfront_distribution" "alb_cf_distro" {
     ssl_support_method  = "sni-only"
   }
   tags = {
-      Name = "${var.tag_name}-cf-distro"
-    }
+    Name = "${var.tag_name}-cf-distro"
+  }
 }
 
 resource "aws_dynamodb_table" "dynamodb_table" {
@@ -640,7 +640,7 @@ resource "aws_route53_record" "primary" {
   name            = var.domain_name
   type            = "A"
   health_check_id = aws_route53_health_check.r53_health_check.id
-  set_identifier = "www1"
+  set_identifier  = "www1"
   alias {
     name                   = aws_alb.app_lb.dns_name
     zone_id                = aws_alb.app_lb.zone_id
@@ -656,13 +656,17 @@ resource "aws_route53_record" "secondary" {
   name            = var.domain_name
   type            = "A"
   health_check_id = aws_route53_health_check.r53_health_check.id
-  set_identifier = "www2"
+  set_identifier  = "www2"
   alias {
-    name                   = aws_s3_bucket_website_configuration.bucket_website_config.website_domain 
+    name                   = aws_s3_bucket_website_configuration.bucket_website_config.website_domain
     zone_id                = aws_s3_bucket.s3_bucket_failover.hosted_zone_id
     evaluate_target_health = true
   }
   failover_routing_policy {
     type = "SECONDARY"
   }
+}
+
+output "websiteurl" {
+  value = "http://${aws_route53_record.primary.name}"
 }
