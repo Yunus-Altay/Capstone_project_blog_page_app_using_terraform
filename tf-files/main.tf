@@ -2,13 +2,13 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~>5.0"
+      version = "5.14"
     }
   }
 }
 
 provider "aws" {
-  region = "us-east-1"
+  region = var.provider_region
 }
 
 resource "aws_db_subnet_group" "db_subnet_group" {
@@ -31,8 +31,8 @@ resource "aws_db_instance" "db_instance" {
   db_subnet_group_name        = aws_db_subnet_group.db_subnet_group.name
   delete_automated_backups    = true
   engine                      = "mysql"
-  engine_version              = "8.0.28"
-  instance_class              = "db.t2.micro"
+  engine_version              = var.rds_db_engine_version
+  instance_class              = var.rds_db_instance_class
   identifier                  = "${lower(var.tag_name)}-db-instance"
   username                    = var.db_username
   password                    = var.db_password
@@ -97,7 +97,7 @@ resource "aws_s3_bucket_notification" "bucket_notification" {
 }
 
 resource "aws_s3_bucket" "s3_bucket_failover" {
-  bucket        = var.s3_bucket_failover
+  bucket        = var.domain_name
   force_destroy = true
 
   tags = {
@@ -109,13 +109,6 @@ resource "aws_s3_bucket_policy" "public_read_policy" {
   bucket     = aws_s3_bucket.s3_bucket_failover.id
   policy     = data.template_file.s3_policy.rendered
   depends_on = [aws_s3_bucket_public_access_block.bucket_failover_public_access_block]
-}
-
-data "template_file" "s3_policy" {
-  template = file("${path.module}/aws-s3-static-website-policy.json")
-  vars = {
-    failover_bucket_name = aws_s3_bucket.s3_bucket_failover.id
-  }
 }
 
 resource "aws_s3_bucket_ownership_controls" "bucket_failover_ownership" {
@@ -160,15 +153,6 @@ resource "aws_s3_bucket_website_configuration" "bucket_website_config" {
   }
 }
 
-data "aws_caller_identity" "current" {}
-output "account_id" {
-  value = data.aws_caller_identity.current.account_id
-}
-
-locals {
-  account_id = data.aws_caller_identity.current.account_id
-}
-
 resource "aws_lambda_permission" "allow_bucket" {
   statement_id   = "AllowExecutionFromS3Bucket"
   action         = "lambda:InvokeFunction"
@@ -181,16 +165,6 @@ resource "aws_lambda_permission" "allow_bucket" {
 resource "local_file" "config" {
   content  = templatefile("${path.module}/lambda.py", { dynamo-db-name = "${var.tag_name}-dynamodb-table" })
   filename = "${path.module}/lambda.py"
-}
-
-data "archive_file" "lambdazip" {
-  type        = "zip"
-  output_path = "lambda_function_payload.zip"
-  source_file = "${path.module}/lambda.py"
-
-  depends_on = [
-    local_file.config,
-  ]
 }
 
 resource "aws_lambda_function" "lambda_dynamodb_function" {
@@ -276,29 +250,9 @@ resource "aws_iam_role" "lambda_role" {
   }
 }
 
-data "aws_ami" "nat_instance_ami" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-
-  filter {
-    name   = "architecture"
-    values = ["x86_64"]
-  }
-
-  filter {
-    name   = "name"
-    values = ["amzn-ami-vpc-nat-*"]
-  }
-}
-
 resource "aws_instance" "nat_instance" {
   ami               = data.aws_ami.nat_instance_ami.id
-  instance_type     = "t2.micro"
+  instance_type     = var.nat_instance_type
   source_dest_check = false
   security_groups   = [aws_security_group.nat_instance_sec_gr.id]
   key_name          = var.key_name
@@ -308,7 +262,6 @@ resource "aws_instance" "nat_instance" {
   }
 
 }
-
 
 resource "aws_alb" "app_lb" {
   name               = "${var.tag_name}-lb-tf"
@@ -331,34 +284,8 @@ resource "aws_alb_target_group" "app_lb_tg" {
   vpc_id      = aws_vpc.main_vpc.id
   target_type = "instance"
 
-  # health_check {
-  #   healthy_threshold   = 2
-  #   unhealthy_threshold = 3
-  # }
   tags = {
     Name = "${var.tag_name}-lb-tf"
-  }
-}
-
-data "aws_ami" "ubuntu_ami" {
-  most_recent = true
-  owners      = ["099720109477"]
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-  filter {
-    name   = "architecture"
-    values = ["x86_64"]
-  }
-  filter {
-    name   = "name"
-    values = ["ubuntu/images/hvm-ssd/ubuntu*"]
-  }
-  filter {
-    name   = "image-id"
-    values = ["ami-0729e439b6769d6ab"]
   }
 }
 
@@ -372,9 +299,6 @@ resource "aws_alb_listener" "app_listener_http" {
       port        = "443"
       protocol    = "HTTPS"
       status_code = "HTTP_301"
-      # host = "#{host}"
-      # path = "/#{path}"
-      # query = "#{query}"
     }
   }
   tags = {
@@ -396,16 +320,11 @@ resource "aws_alb_listener" "app_listener_https" {
   }
 }
 
-# "${join("", ["*.", split(".", var.domain_name)[1], ".", split(".", var.domain_name)[2]])}"
-
 # resource "aws_route53_zone" "r53_zone" {
 #   name = var.domain_name
 # }
-
-data "aws_route53_zone" "selected" {
-  name         = var.existing_hosted_zone
-  private_zone = false
-}
+# If there isn't a hosted zone already to be selected, the resource block above can be used
+# Other resource blocks have to be adjusted accordingly
 
 resource "aws_acm_certificate" "certificate" {
   domain_name       = var.domain_name
@@ -457,13 +376,25 @@ resource "aws_iam_instance_profile" "lt_role_profile" {
   path = "/"
 }
 
+resource "aws_instance" "bastion_host" {
+  ami                    = data.aws_ami.al2023.id
+  instance_type          = var.bastion_host_instance_type
+  key_name               = var.key_name
+  vpc_security_group_ids = [aws_security_group.bastion_host_sec_gr.id]
+  subnet_id              = aws_subnet.public_subnet[0].id
+
+  tags = {
+    Name = "${var.tag_name}-bastion-host"
+  }
+}
+
 resource "aws_launch_template" "asg_lt" {
   name     = "${var.tag_name}-lt"
   image_id = data.aws_ami.ubuntu_ami.id
   iam_instance_profile {
     name = "${var.tag_name}-lt-role-profile"
   }
-  instance_type          = "t2.micro"
+  instance_type          = var.asg_lt_instance_type
   key_name               = var.key_name
   vpc_security_group_ids = [aws_security_group.ec2_sec_gr.id]
   user_data = base64encode(templatefile("user-data.sh", {
@@ -489,9 +420,9 @@ resource "aws_launch_template" "asg_lt" {
 
 resource "aws_autoscaling_group" "app_asg" {
   default_cooldown          = 200
-  max_size                  = 4
-  min_size                  = 1
-  desired_capacity          = 2
+  max_size                  = var.asg_max_instance_size
+  min_size                  = var.asg_min_instance_size
+  desired_capacity          = var.asg_desired_capacity
   name                      = "${var.tag_name}-lt-asg"
   health_check_grace_period = 300
   health_check_type         = "ELB"
@@ -519,7 +450,7 @@ resource "aws_autoscaling_policy" "asg_policy" {
     predefined_metric_specification {
       predefined_metric_type = "ASGAverageCPUUtilization"
     }
-    target_value = 70.0
+    target_value = var.asg_policy_target_value
   }
 }
 
@@ -540,10 +471,6 @@ resource "aws_autoscaling_notification" "asg_notifications" {
 
 resource "aws_sns_topic" "sns_topic" {
   name = "server-status-change"
-}
-
-locals {
-  alb_origin_id = "myALBOrigin"
 }
 
 resource "aws_sns_topic_subscription" "EmailSubscription" {
@@ -665,8 +592,4 @@ resource "aws_route53_record" "secondary" {
   failover_routing_policy {
     type = "SECONDARY"
   }
-}
-
-output "websiteurl" {
-  value = "http://${aws_route53_record.primary.name}"
 }

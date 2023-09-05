@@ -147,3 +147,30 @@ resource "aws_security_group" "nat_instance_sec_gr" {
     Name = "${var.tag_name}-NAT-instance-sec-gr"
   }
 }
+
+resource "aws_security_group" "bastion_host_sec_gr" {
+  name        = "${var.tag_name}-bastion-host-sec-gr"
+  description = "Bastion Host Security Group allows SSH port from anywhere "
+  vpc_id      = aws_vpc.main_vpc.id
+
+  ingress {
+    description      = "SSH inbound traffic"
+    from_port        = 22
+    to_port          = 22
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
+  }
+
+  egress {
+    from_port        = 0
+    to_port          = 0
+    protocol         = "-1"
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
+  }
+
+  tags = {
+    Name = "${var.tag_name}-bastion-host-sec-gr"
+  }
+}

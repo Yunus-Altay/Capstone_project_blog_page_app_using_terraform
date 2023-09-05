@@ -35,7 +35,6 @@ resource "aws_subnet" "private_subnet" {
   }
 }
 
-
 resource "aws_route_table" "main_public_rt" {
   vpc_id = aws_vpc.main_vpc.id
   route {
@@ -77,7 +76,7 @@ resource "aws_route_table_association" "rt_associate_private" {
 
 resource "aws_vpc_endpoint" "vpc_endpoint_s3" {
   vpc_id            = aws_vpc.main_vpc.id
-  service_name      = "com.amazonaws.us-east-1.s3"
+  service_name      = var.s3_vpc_endpoint_service_name
   vpc_endpoint_type = "Gateway"
   depends_on        = [aws_s3_bucket.s3_bucket_content]
   tags = {
